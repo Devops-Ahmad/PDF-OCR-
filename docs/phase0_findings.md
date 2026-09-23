@@ -132,17 +132,50 @@ from every page without touching any narrative text. This runs today, ahead
 of layout detection, because it only needs position + repetition, not a
 trained layout model.
 
-**Reading-order scrambling is still open** — that one needs an actual
-layout/reading-order model (Surya), not a heuristic, and remains the next
-priority.
+## Update (2026-09-23): reading-order scrambling root-caused and fixed
+
+Wired up Surya (`layout/surya_layout.py`) for layout typing + reading order,
+on by default. Two findings from getting it running and validated:
+
+**Operational**: surya-ocr>=0.20 is not a plain in-process torch model. It
+serves its layout model as a VLM via either Docker+GPU (`vllm`) or a locally
+run `llama-server` process (`llamacpp`). Docker's nvidia runtime wasn't
+configured here, so `scripts/setup_layout_backend.sh` downloads a
+self-contained llama.cpp CUDA build into `.tools/` (gitignored) instead of
+requiring a system-wide Docker/nvidia-container-toolkit setup. Steady-state
+layout inference: ~2-3s/page after a one-time ~10-13s server-startup cost
+per book (paid once per `ocr convert` invocation, not per page).
+
+**The actual bug, root-caused**: it was never really a "layout" problem.
+Investigating the exact scrambled page found earlier, the real cause is that
+PaddleOCR's text detector sometimes splits *one* justified Arabic line into
+2-3 separate boxes with slightly different baselines (confirmed via raw
+bbox coordinates -- e.g. one visual line came back as three boxes: `x=[258,1200]`,
+`x=[130,258]`, `x=[50,122]`, at nearly the same y). The original fix
+(sort by block reading-order, then ascending y) got this wrong whenever
+y-ordering didn't happen to match right-to-left reading order, which is
+exactly backwards for Arabic. The real fix (`_cluster_rows` +
+`_order_block` in `layout/surya_layout.py`): group lines into visual rows by
+y-overlap, then within a row sort by **descending x** (RTL), not by y.
+Verified against the exact real page that exposed the bug: every fragment
+cluster now reassembles in the correct order, matching the source text
+exactly, and the page-number stamp and watermark are now excluded via
+Surya's own `footer` classification (in addition to the repetition-based
+filter, which still runs as a second, independent line of defense).
+
+Locked in with `tests/test_layout_assignment.py::test_rtl_line_split_into_multiple_boxes_is_reassembled_in_order`,
+using the real bbox coordinates from that page.
 
 ## Open items for the next phase
 
 1. Root-cause the two slow-outlier books before committing to a full-library
-   time estimate.
-2. Wire up Surya for layout + reading order — required to fix the
-   reading-order scrambling found above, not just a nice-to-have.
-3. Sample more books to find out whether any of the 101 are true photographic
+   time estimate (now compounded by layout's added ~2-3s/page).
+2. Sample more books to find out whether any of the 101 are true photographic
    scans (none seen yet in 12 samples across 5 series).
-4. QARI-OCR escalation tier (Pass 2) is stubbed in config
+3. QARI-OCR escalation tier (Pass 2) is stubbed in config
    (`ocr.escalation.enabled: false`) but not implemented yet.
+4. The `layout.engine: "none"` fallback path (no torch/surya installed) does
+   not get the RTL row-clustering fix -- it still uses PaddleOCR's raw box
+   order. Worth extracting `_cluster_rows`/`_order_block` as a
+   layout-independent post-process if that path needs to be production-grade
+   too, rather than only the surya path.

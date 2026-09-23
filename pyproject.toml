@@ -22,6 +22,11 @@ dependencies = [
     # (2026-09-23). Re-test this pin before ever bumping it.
     "paddlepaddle==3.1.0",
     "paddleocr>=3.7",
+    # Layout/reading-order detection. Pulls in torch (CUDA build, several GB
+    # download the first time -- see README setup notes) and needs a local
+    # llama-server binary for its inference backend; run
+    # scripts/setup_layout_backend.sh once after installing this.
+    "surya-ocr>=0.22",
 ]
 
 [project.scripts]

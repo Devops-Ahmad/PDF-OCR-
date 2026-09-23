@@ -5,6 +5,10 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 
+# Downloaded binaries (llama.cpp CUDA build for the Surya layout backend) --
+# large, platform-specific, re-fetched by the setup step, never committed.
+.tools/
+
 # Secrets: cloud-fallback API keys must live here, never in config/*.yaml or code.
 .env
 *.key

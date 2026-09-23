@@ -32,7 +32,11 @@ preprocess:
     min_effective_dpi: 200
 
 layout:
-  engine: "none"               # none | surya  (surya integration lands in a later phase)
+  # Reading order is treated as part of OCR correctness, not optional
+  # polish (see docs/phase0_findings.md for the scrambled-dialogue defect
+  # this fixes) -- surya is the default, not opt-in. "none" is available as
+  # a fast/degraded fallback when torch/surya aren't installed.
+  engine: "surya"               # surya | none
 
 ocr:
   primary_engine: "paddleocr"

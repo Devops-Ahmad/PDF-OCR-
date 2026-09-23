@@ -15,7 +15,14 @@ real throughput numbers) that shaped the current defaults.
 uv venv --python 3.12 .venv
 source .venv/bin/activate
 uv pip install -e .
+./scripts/setup_layout_backend.sh   # one-time: local llama.cpp CUDA build for layout/reading-order
 ```
+
+The last step downloads a self-contained llama.cpp build into `.tools/`
+(gitignored, nothing system-wide) that Surya's layout model runs on. The
+first real `ocr convert` afterwards also downloads its GGUF model weights
+(~1.5GB, cached by `huggingface_hub`, one-time). See
+`docs/phase0_findings.md` for why this exists instead of a plain pip install.
 
 ## Usage
 
@@ -45,12 +52,18 @@ part of the product surface.
 ## Status
 
 Implemented and validated against a real 100+ book, 39k+ page Arabic scan
-library (Phase 0/1/2, partial): rasterization, adaptive preprocessing,
-PaddleOCR Pass 1, heuristic quality scoring, page-atomic internal records,
-crash-safe resumability, a conservative recurring-watermark filter.
+library: rasterization, adaptive preprocessing, PaddleOCR Pass 1, Surya
+layout detection + reading-order correction (on by default), heuristic
+quality scoring, page-atomic internal records, crash-safe resumability, a
+conservative recurring-watermark filter.
 
-Not yet implemented: real layout/reading-order detection (Surya) — currently
-region order is whatever PaddleOCR's box-sort produces, which is known to be
-wrong on some pages (see `docs/phase0_findings.md`); Pass 2 escalation
-(QARI-OCR) for low-confidence pages; Pass 3 cloud fallback (opt-in only,
-disabled by default).
+Reading order is treated as a correctness requirement, not a nice-to-have.
+A real defect was found and fixed: PaddleOCR's line detector sometimes
+splits one justified Arabic line into several boxes with slightly different
+baselines; naive top-to-bottom sorting scrambled these. The fix
+(`layout/surya_layout.py`) clusters lines into visual rows by y-overlap,
+then orders each row right-to-left by x-position -- verified against the
+exact real page that exposed the bug (`docs/phase0_findings.md`).
+
+Not yet implemented: Pass 2 escalation (QARI-OCR) for low-confidence pages;
+Pass 3 cloud fallback (opt-in only, disabled by default).

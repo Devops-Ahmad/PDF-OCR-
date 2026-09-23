@@ -79,26 +79,29 @@ class BookOutputWriter(OutputWriter):
         pages.sort(key=lambda p: p["page"])
         return pages
 
-    def _page_body_lines(self, page: dict, watermark_lines: set[str]) -> list[str]:
-        lines = []
+    def _page_body_regions(self, page: dict, watermark_lines: set[str]) -> list[tuple[str, str]]:
+        """Returns [(kind, text), ...] for a page, excluding non-content
+        region kinds and detected watermark lines.
+        """
+        out = []
         for region in page.get("regions", []):
             if region["kind"] in _EXCLUDED_REGION_KINDS:
                 continue
             text = region.get("text", "").strip()
             if not text or text in watermark_lines:
                 continue
-            lines.append(text)
-        if not lines and page.get("text"):
+            out.append((region["kind"], text))
+        if not out and page.get("text"):
             # No region breakdown available (shouldn't normally happen) -- fall
             # back to the whole-page text rather than silently dropping content.
-            lines = [line for line in page["text"].split("\n") if line.strip() and line.strip() not in watermark_lines]
-        return lines
+            out = [("body", line) for line in page["text"].split("\n") if line.strip() and line.strip() not in watermark_lines]
+        return out
 
     def _write_txt(self, pages: list[dict], watermark_lines: set[str]) -> None:
         chunks = []
         for page in pages:
             marker = self.txt_marker.format(page=page["page"])
-            body = "\n".join(self._page_body_lines(page, watermark_lines))
+            body = "\n".join(text for _, text in self._page_body_regions(page, watermark_lines))
             chunks.append(f"{marker}\n\n{body}\n")
         with open(self.output_dir / "book.txt", "w", encoding="utf-8") as f:
             f.write("\n\n".join(chunks) + "\n")
@@ -107,8 +110,8 @@ class BookOutputWriter(OutputWriter):
         chunks = [f"# {title}\n"]
         for page in pages:
             heading = self.md_heading.format(page=page["page"])
-            body = "\n\n".join(self._page_body_lines(page, watermark_lines))
-            chunks.append(f"{heading}\n\n{body}\n")
+            paragraphs = [f"### {text}" if kind == "heading" else text for kind, text in self._page_body_regions(page, watermark_lines)]
+            chunks.append(f"{heading}\n\n" + "\n\n".join(paragraphs) + "\n")
         with open(self.output_dir / "book.md", "w", encoding="utf-8") as f:
             f.write("\n".join(chunks) + "\n")
 

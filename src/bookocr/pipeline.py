@@ -1,15 +1,18 @@
 """Orchestrates a single book through the pipeline: rasterize -> preprocess
--> OCR Pass 1 -> quality score -> write. Produces exactly two public
-artifacts, book.txt and book.md, in the caller-specified output directory.
-Everything else written (pages.jsonl, state.db, qc_report.json, manifest.json)
-lives under <output>/.ocr_internal/ and exists only to make the tool
-reliable, resumable, and debuggable -- never as a competing product output.
+-> layout detection -> OCR Pass 1 -> quality score -> write. Produces
+exactly two public artifacts, book.txt and book.md, in the caller-specified
+output directory. Everything else written (pages.jsonl, state.db,
+qc_report.json, manifest.json) lives under <output>/.ocr_internal/ and
+exists only to make the tool reliable, resumable, and debuggable -- never as
+a competing product output.
 
-Escalation (Pass 2 QARI-OCR, Pass 3 cloud fallback) and real layout detection
-(Surya) are later work -- see docs/roadmap.md. `EscalationPolicy` only ever
-returns 'accept' or 'flag_for_review' for now; the interface is already in
-place so wiring in an actual secondary engine later is additive, not a
-rewrite.
+Escalation (Pass 2 QARI-OCR, Pass 3 cloud fallback) is later work. Reading
+order is not: layout detection (Surya) runs by default because reading
+order is treated as part of OCR correctness, not optional polish -- see
+docs/phase0_findings.md for the scrambled-dialogue defect this fixes.
+`EscalationPolicy` only ever returns 'accept' or 'flag_for_review' for now;
+the interface is already in place so wiring in an actual secondary engine
+later is additive, not a rewrite.
 """
 
 from __future__ import annotations
@@ -47,7 +50,18 @@ class BookPipeline:
         self.preprocessor = AdaptivePreprocessor(config.model_dump())
         self.engine = PaddleOCREngine(config.ocr.primary)
         self.evaluator = HeuristicQualityEvaluator(config.quality.model_dump())
+        self.layout_detector = self._build_layout_detector(config.layout.engine)
         logging.basicConfig(level=config.logging.level)
+
+    @staticmethod
+    def _build_layout_detector(engine_name: str):
+        if engine_name == "none":
+            return None
+        if engine_name == "surya":
+            from bookocr.layout.surya_layout import SuryaLayoutDetector
+
+            return SuryaLayoutDetector()
+        raise ValueError(f"Unknown layout.engine: {engine_name!r}")
 
     def convert(self, source_path: str, output_dir: str, force: bool = False) -> None:
         """The one public entry point: PDF in, book.txt + book.md out."""
@@ -114,6 +128,29 @@ class BookPipeline:
             page_log.error("ocr_engine_failed", error=str(e))
             state.set_page_status(book_id, page_number, PageStatus.FAILED, error=str(e), bump_retry=True)
             return
+
+        from bookocr.layout.reading_order import order_lines_rtl
+
+        if self.layout_detector is not None:
+            try:
+                layout_regions = self.layout_detector.detect(page_img)
+                from bookocr.layout.surya_layout import assign_lines_to_layout
+
+                result.regions = assign_lines_to_layout(result.regions, layout_regions)
+            except Exception as e:
+                # Layout is a structure/ordering improvement, not a hard
+                # dependency for having text at all -- a layout-model crash
+                # must not lose the page's OCR output. Still apply the
+                # layout-independent RTL row fix rather than falling all the
+                # way back to PaddleOCR's raw (known-scrambling-prone) order.
+                page_log.warning("layout_detection_failed", error=str(e))
+                result.regions = order_lines_rtl(result.regions)
+        else:
+            # No typed layout blocks, but the RTL row-splitting fix is
+            # layout-independent -- always apply it, not just when Surya runs.
+            result.regions = order_lines_rtl(result.regions)
+
+        result.text = "\n".join(r.text for r in result.regions)
 
         report = self.evaluator.score(result, page_img)
         status = PageStatus.COMPLETED if report.tier in (QualityTier.HIGH, QualityTier.MEDIUM) else PageStatus.LOW_CONFIDENCE
