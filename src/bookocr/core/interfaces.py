@@ -3,7 +3,7 @@
 This is the extensibility contract: a new OCR engine, a new preprocessor, a
 new layout detector, or a cloud fallback provider must implement one of these
 and nothing else in the pipeline should need to change. Concrete
-implementations live under mimi_ocr/{engines,rasterize,preprocess,layout,
+implementations live under bookocr/{engines,rasterize,preprocess,layout,
 quality,output}/.
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 
-from mimi_ocr.core.types import EngineResult, PageImage, PageResult, QualityReport, Region
+from bookocr.core.types import EngineResult, PageImage, PageResult, QualityReport, Region
 
 
 class DocumentSource(ABC):

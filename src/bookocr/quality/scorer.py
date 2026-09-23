@@ -21,8 +21,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from mimi_ocr.core.interfaces import QualityEvaluator
-from mimi_ocr.core.types import EngineResult, PageImage, QualityReport, QualityTier
+from bookocr.core.interfaces import QualityEvaluator
+from bookocr.core.types import EngineResult, PageImage, QualityReport, QualityTier
 
 # High-frequency Arabic function words / particles. Cheap stand-in for a real
 # dictionary lookup: real prose is dense with these; garbled OCR output isn't.

@@ -13,8 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from mimi_ocr.core.interfaces import Preprocessor
-from mimi_ocr.core.types import PageImage
+from bookocr.core.interfaces import Preprocessor
+from bookocr.core.types import PageImage
 
 
 class AdaptivePreprocessor(Preprocessor):

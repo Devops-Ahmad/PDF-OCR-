@@ -1,5 +1,5 @@
-from mimi_ocr.core.state import StateStore
-from mimi_ocr.core.types import PageStatus
+from bookocr.core.state import StateStore
+from bookocr.core.types import PageStatus
 
 
 def test_resume_semantics(tmp_path):

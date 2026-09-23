@@ -5,9 +5,11 @@ library is meant to grow to thousands of books, so state updates must be
 atomic single-row writes, not full-file rewrites. A JSON `_state.json` sounds
 fine at 101 books but stops being fine at 10,000; SQLite is fine at both.
 
-One state.db for the whole library (see config paths.state_db), one table,
-keyed by (book_id, page_number). This is the source of truth for "what still
-needs doing" — book.jsonl is the source of truth for "what the text is".
+One state.db per book, living at <output>/.ocr_internal/state.db, one table,
+keyed by (book_id, page_number) (book_id is always the fixed string "book"
+here since each output directory holds exactly one book). This is the
+source of truth for "what still needs doing" -- pages.jsonl is the source of
+truth for "what the text is".
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-from mimi_ocr.core.types import PageStatus
+from bookocr.core.types import PageStatus
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS pages (

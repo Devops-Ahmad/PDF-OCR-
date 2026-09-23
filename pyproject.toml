@@ -1,7 +1,7 @@
 [project]
-name = "mimi-ocr"
+name = "bookocr"
 version = "0.1.0"
-description = "Permanent OCR infrastructure for the Mimi literary-analysis project: turns scanned Arabic book PDFs into page-traceable, quality-scored text for downstream literary analysis."
+description = "Standalone, portable OCR tool: turns a scanned book PDF into a high-fidelity, page-preserved book.txt and book.md. No dependency on any downstream project."
 requires-python = ">=3.12"
 dependencies = [
     "pymupdf>=1.28",
@@ -25,14 +25,14 @@ dependencies = [
 ]
 
 [project.scripts]
-mimi-ocr = "mimi_ocr.cli.main:cli"
+ocr = "bookocr.cli.main:cli"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mimi_ocr"]
+packages = ["src/bookocr"]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

@@ -8,13 +8,12 @@ page counts/metadata without a second tool invocation.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pymupdf
 
-from mimi_ocr.core.interfaces import DocumentSource, Rasterizer
-from mimi_ocr.core.types import PageImage
+from bookocr.core.interfaces import DocumentSource, Rasterizer
+from bookocr.core.types import PageImage
 
 
 class CorruptedPageError(Exception):
@@ -22,17 +21,6 @@ class CorruptedPageError(Exception):
         super().__init__(f"page {page_number}: {reason}")
         self.page_number = page_number
         self.reason = reason
-
-
-def book_id_for(source_path: str) -> str:
-    """Deterministic id from the source path, stable across reruns, used as
-    the directory name under processed/ and the key in state.db. Not the
-    filename alone, since two series could have same-named files.
-    """
-    h = hashlib.sha1(source_path.encode("utf-8")).hexdigest()[:10]
-    stem = Path(source_path).stem
-    safe_stem = "".join(c if (c.isalnum() or c in "-_") else "_" for c in stem)[:60]
-    return f"{safe_stem}_{h}"
 
 
 class PyMuPDFSource(DocumentSource):
@@ -52,7 +40,6 @@ class PyMuPDFRasterizer(Rasterizer):
     def render_page(self, source_path: str, page_number: int, dpi: int, out_dir: str) -> PageImage:
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        book_id = book_id_for(source_path)
         out_path = out / f"page_{page_number:05d}.png"
 
         try:
@@ -63,7 +50,7 @@ class PyMuPDFRasterizer(Rasterizer):
                 pix = page.get_pixmap(dpi=dpi)
                 pix.save(str(out_path))
                 return PageImage(
-                    book_id=book_id,
+                    book_id="book",
                     page_number=page_number,
                     path=str(out_path),
                     width=pix.width,

@@ -85,6 +85,8 @@ class PageResult:
     engine_versions: dict[str, str] = field(default_factory=dict)
     processed_at: str = ""
     duration_s: float = 0.0
+    page_width: int = 0
+    page_height: int = 0
 
     def to_jsonl_record(self) -> dict:
         return {
@@ -95,6 +97,8 @@ class PageResult:
             "status": self.status.value,
             "engine_used": self.engine_used,
             "processing_pass": self.processing_pass,
+            "page_width": self.page_width,
+            "page_height": self.page_height,
             "regions": [
                 {
                     "kind": r.kind,

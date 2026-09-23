@@ -1,22 +1,14 @@
-# Default configuration for mimi-ocr.
-# Override any of this with a project- or run-specific YAML passed via --config,
-# or with individual --set key=value flags on the CLI (deep-merged over this file).
-
-# Paths are resolved relative to this file's directory (ocr_pipeline/config/),
-# so "../../X" reaches workshop/X -- the sibling of ocr_pipeline/ itself.
-# This keeps the mandated separation: sourse/ (read-only) and processed/
-# (this pipeline's only output) both live at the workshop/ level, alongside
-# distnation/ (Claude's knowledge-base output, owned by a different pipeline).
-paths:
-  source_dir: "../../sourse"     # read-only, never written to
-  processed_dir: "../../processed" # this pipeline's only output location
-  work_dir: "../.ocr_work"       # internal scratch: rasterized page images. Fine to live inside ocr_pipeline/.
-  state_db: "../.ocr_work/state.db"
+# Default configuration for bookocr.
+# Override with a project-specific YAML passed via --config, or individual
+# --set key=value flags on the CLI (deep-merged over this file).
+#
+# There is deliberately no source/output path configured here: bookocr is a
+# portable tool invoked as `ocr convert <path-to.pdf> [--output DIR]` against
+# an arbitrary file, not a library manager for a fixed directory tree.
 
 rasterize:
   dpi: 300
   image_format: "png"
-  keep_rendered_pages: false   # delete page rasters from work_dir once OCR'd, unless they were flagged for review
 
 triage:
   blank_page_ink_ratio_threshold: 0.002   # below this fraction of non-white pixels -> BLANK
@@ -50,10 +42,10 @@ ocr:
     text_recognition_model_name: "arabic_PP-OCRv5_mobile_rec"
     device: "cpu"               # no working GPU wheel for this paddlepaddle/CUDA combo yet; see docs/hardware_notes.md
   escalation:
-    enabled: false              # Phase 3: QARI-OCR local VLM tier, not wired up yet
+    enabled: false              # Pass 2: QARI-OCR local VLM tier, not wired up yet
     engine: "qari-ocr"
   cloud_fallback:
-    enabled: false              # Phase 4: opt-in only, never on by default
+    enabled: false              # Pass 3: opt-in only, never on by default
     provider: "gemini"
     api_key_env: "GEMINI_API_KEY"
 
@@ -70,10 +62,25 @@ quality:
     medium: 60
     # below "medium" -> LOW_CONFIDENCE, triggers escalation when enabled
 
+watermark_filter:
+  enabled: true
+  # A line is treated as a non-content watermark/scan-artifact only if BOTH
+  # hold: it sits in the bottom band of the page (by bounding-box position)
+  # AND it recurs, near-identically, across a large share of the book's
+  # pages. Position alone or repetition alone is not enough -- a repeated
+  # short line of real dialogue must not be filtered.
+  bottom_band_fraction: 0.15
+  min_page_occurrences: 3
+  min_page_fraction: 0.3
+
 concurrency:
   cpu_workers: 6                # leave headroom on a 12-thread machine
   gpu_stage_batch_size: 4
 
+output:
+  internal_dirname: ".ocr_internal"   # per-page JSONL, state db, logs -- not a product output
+  txt_page_marker: "===== PAGE {page} ====="
+  md_page_heading: "## Page {page}"
+
 logging:
   level: "INFO"
-  dir: "../.ocr_work/logs"

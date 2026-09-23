@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
 
@@ -33,17 +33,9 @@ def _set_path(d: dict, dotted_key: str, value: Any) -> None:
     cur[parts[-1]] = value
 
 
-class PathsConfig(BaseModel):
-    source_dir: str
-    processed_dir: str
-    work_dir: str
-    state_db: str
-
-
 class RasterizeConfig(BaseModel):
     dpi: int = 300
     image_format: str = "png"
-    keep_rendered_pages: bool = False
 
 
 class TriageConfig(BaseModel):
@@ -74,36 +66,39 @@ class QualityConfig(BaseModel):
     thresholds: dict
 
 
+class WatermarkFilterConfig(BaseModel):
+    enabled: bool = True
+    bottom_band_fraction: float = 0.15
+    min_page_occurrences: int = 3
+    min_page_fraction: float = 0.3
+
+
 class ConcurrencyConfig(BaseModel):
     cpu_workers: int = 6
     gpu_stage_batch_size: int = 4
 
 
+class OutputConfig(BaseModel):
+    internal_dirname: str = ".ocr_internal"
+    txt_page_marker: str = "===== PAGE {page} ====="
+    md_page_heading: str = "## Page {page}"
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
-    dir: str
 
 
 class Config(BaseModel):
-    paths: PathsConfig
     rasterize: RasterizeConfig
     triage: TriageConfig
     preprocess: PreprocessConfig
     layout: LayoutConfig
     ocr: OcrConfig
     quality: QualityConfig
+    watermark_filter: WatermarkFilterConfig
     concurrency: ConcurrencyConfig
+    output: OutputConfig
     logging: LoggingConfig
-
-    # Resolved base dir for turning relative config paths into absolute ones,
-    # filled in by load_config().
-    _config_dir: Path = PrivateAttr(default=None)  # type: ignore[assignment]
-
-    def resolve_path(self, raw: str) -> Path:
-        p = Path(raw)
-        if p.is_absolute():
-            return p
-        return (self._config_dir / p).resolve()
 
 
 def load_config(
@@ -112,17 +107,12 @@ def load_config(
 ) -> Config:
     with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as f:
         merged = yaml.safe_load(f)
-    config_dir = DEFAULT_CONFIG_PATH.parent
 
     if override_path is not None:
-        override_path = Path(override_path)
         with open(override_path, encoding="utf-8") as f:
             merged = _deep_merge(merged, yaml.safe_load(f) or {})
-        config_dir = override_path.parent
 
     for dotted_key, value in (cli_overrides or {}).items():
         _set_path(merged, dotted_key, value)
 
-    cfg = Config.model_validate(merged)
-    cfg._config_dir = config_dir
-    return cfg
+    return Config.model_validate(merged)

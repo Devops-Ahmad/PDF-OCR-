@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import time
 
-from mimi_ocr.core.interfaces import OCREngine
-from mimi_ocr.core.types import EngineResult, PageImage, Region
+from bookocr.core.interfaces import OCREngine
+from bookocr.core.types import EngineResult, PageImage, Region
 
 _engine_singleton = None
 

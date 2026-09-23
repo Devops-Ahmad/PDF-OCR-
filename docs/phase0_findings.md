@@ -18,7 +18,11 @@ whenever a new finding changes a default.
 
 **Conclusion**: PDF-type classification must happen per-page, not per-book —
 even the "best" books in this library need OCR for their body text. See
-`mimi_ocr/pipeline.py` — there is no book-level "skip OCR" branch.
+`bookocr/pipeline.py` — there is no book-level "skip OCR" branch.
+
+(Note: this survey was run against a specific personal library while
+validating the tool. `bookocr` itself is a standalone tool with no
+dependency on that library or any project built on top of it — see README.md.)
 
 ## Scan quality: not what was assumed
 
@@ -73,7 +77,8 @@ Ran the actual pipeline (rasterize → adaptive preprocess → PaddleOCR Pass 1
 (`بساتين عربستان 1 .pdf`, 536 pages):
 
 - Killed the process mid-run (SIGTERM) after page 16. Re-ran with no flags:
-  correctly resumed from page 17, not page 1. Verified via `book.jsonl`:
+  correctly resumed from page 17, not page 1. Verified via the internal
+  per-page record (`pages.jsonl` as of the standalone-tool refactor):
   20 lines after both runs, page numbers 1–20, **zero duplicates**.
 - Full run on a 4-page extract confirmed `finalize_book()` end to end:
   `manifest.json`, `book.md` (page-marker comments), `qc_report.json` all
@@ -116,12 +121,27 @@ CPU-bound Pass 1** for all 39,274 pages — about 4–5 days of unattended
 background processing, not the ~11 hours originally estimated before this
 benchmark ran. This is the kind of correction Phase 0 is for.
 
+## Update: watermark filtering implemented, reading order still open
+
+A conservative recurring-watermark filter (`postprocess/watermark.py`) is now
+implemented and confirmed working: a line is only stripped from the final
+`book.txt`/`book.md` if it BOTH sits in the bottom band of the page AND
+recurs near-identically across a large share of the book's pages. On the
+4-page test extract above, this correctly removed `t.me/ktabpdf` and `مكتبة`
+from every page without touching any narrative text. This runs today, ahead
+of layout detection, because it only needs position + repetition, not a
+trained layout model.
+
+**Reading-order scrambling is still open** — that one needs an actual
+layout/reading-order model (Surya), not a heuristic, and remains the next
+priority.
+
 ## Open items for the next phase
 
 1. Root-cause the two slow-outlier books before committing to a full-library
    time estimate.
-2. Wire up Surya for layout + reading order — required to fix the watermark
-   contamination and reading-order scrambling found above, not just a nice-to-have.
+2. Wire up Surya for layout + reading order — required to fix the
+   reading-order scrambling found above, not just a nice-to-have.
 3. Sample more books to find out whether any of the 101 are true photographic
    scans (none seen yet in 12 samples across 5 series).
 4. QARI-OCR escalation tier (Pass 2) is stubbed in config
