@@ -1,0 +1,10 @@
+.venv/
+.ocr_work/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Secrets: cloud-fallback API keys must live here, never in config/*.yaml or code.
+.env
+*.key

@@ -1,0 +1,38 @@
+[project]
+name = "mimi-ocr"
+version = "0.1.0"
+description = "Permanent OCR infrastructure for the Mimi literary-analysis project: turns scanned Arabic book PDFs into page-traceable, quality-scored text for downstream literary analysis."
+requires-python = ">=3.12"
+dependencies = [
+    "pymupdf>=1.28",
+    "opencv-python-headless>=4.10",
+    "numpy>=2.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.10",
+    "click>=8.1",
+    "rich>=13.0",
+    "structlog>=24.1",
+    # PINNED, do not upgrade blindly: paddlepaddle==3.3.1 crashes on CPU
+    # inference with `NotImplementedError: ConvertPirAttribute2RuntimeAttribute
+    # not support [pir::ArrayAttribute<pir::DoubleAttribute>]` whenever oneDNN
+    # is enabled (the default), on every text-detection model tested
+    # (PP-OCRv5_server_det and PP-OCRv5_mobile_det). This is a PIR/oneDNN
+    # regression in paddlepaddle itself, not a paddleocr issue. 3.1.0 is the
+    # newest version confirmed NOT to hit it during Phase 0 benchmarking
+    # (2026-09-23). Re-test this pin before ever bumping it.
+    "paddlepaddle==3.1.0",
+    "paddleocr>=3.7",
+]
+
+[project.scripts]
+mimi-ocr = "mimi_ocr.cli.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mimi_ocr"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]

@@ -1,0 +1,79 @@
+# Default configuration for mimi-ocr.
+# Override any of this with a project- or run-specific YAML passed via --config,
+# or with individual --set key=value flags on the CLI (deep-merged over this file).
+
+# Paths are resolved relative to this file's directory (ocr_pipeline/config/),
+# so "../../X" reaches workshop/X -- the sibling of ocr_pipeline/ itself.
+# This keeps the mandated separation: sourse/ (read-only) and processed/
+# (this pipeline's only output) both live at the workshop/ level, alongside
+# distnation/ (Claude's knowledge-base output, owned by a different pipeline).
+paths:
+  source_dir: "../../sourse"     # read-only, never written to
+  processed_dir: "../../processed" # this pipeline's only output location
+  work_dir: "../.ocr_work"       # internal scratch: rasterized page images. Fine to live inside ocr_pipeline/.
+  state_db: "../.ocr_work/state.db"
+
+rasterize:
+  dpi: 300
+  image_format: "png"
+  keep_rendered_pages: false   # delete page rasters from work_dir once OCR'd, unless they were flagged for review
+
+triage:
+  blank_page_ink_ratio_threshold: 0.002   # below this fraction of non-white pixels -> BLANK
+  orientation_check: true                  # use Tesseract OSD if available; skip silently if not installed
+
+preprocess:
+  # Every step below is conditional: it only runs if the page's own analysis
+  # says it's needed. Nothing is applied blindly to every page.
+  deskew:
+    enabled: true
+    min_angle_deg: 0.3
+  denoise:
+    enabled: true
+    noise_score_threshold: 0.15
+  binarize:
+    enabled: true
+    method: "sauvola"          # sauvola | otsu
+    low_contrast_threshold: 40  # std-dev of grayscale histogram below which we binarize
+  upscale:
+    enabled: true
+    min_effective_dpi: 200
+
+layout:
+  engine: "none"               # none | surya  (surya integration lands in a later phase)
+
+ocr:
+  primary_engine: "paddleocr"
+  primary:
+    lang: "ar"
+    text_detection_model_name: "PP-OCRv5_server_det"
+    text_recognition_model_name: "arabic_PP-OCRv5_mobile_rec"
+    device: "cpu"               # no working GPU wheel for this paddlepaddle/CUDA combo yet; see docs/hardware_notes.md
+  escalation:
+    enabled: false              # Phase 3: QARI-OCR local VLM tier, not wired up yet
+    engine: "qari-ocr"
+  cloud_fallback:
+    enabled: false              # Phase 4: opt-in only, never on by default
+    provider: "gemini"
+    api_key_env: "GEMINI_API_KEY"
+
+quality:
+  # Weighted 0-100 page confidence score. Thresholds decide tier routing.
+  weights:
+    engine_confidence: 0.5
+    arabic_char_ratio: 0.2
+    dictionary_hit_rate: 0.15
+    length_anomaly: 0.1
+    garbage_symbol_ratio: 0.05
+  thresholds:
+    high: 80
+    medium: 60
+    # below "medium" -> LOW_CONFIDENCE, triggers escalation when enabled
+
+concurrency:
+  cpu_workers: 6                # leave headroom on a 12-thread machine
+  gpu_stage_batch_size: 4
+
+logging:
+  level: "INFO"
+  dir: "../.ocr_work/logs"
