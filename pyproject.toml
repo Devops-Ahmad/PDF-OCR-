@@ -27,6 +27,12 @@ dependencies = [
     # llama-server binary for its inference backend; run
     # scripts/setup_layout_backend.sh once after installing this.
     "surya-ocr>=0.22",
+    # Pass 2 escalation engine (QARI-OCR, a Qwen2-VL-2B fine-tune). Shares
+    # the torch install surya already pulled in.
+    "transformers>=4.49",
+    "qwen-vl-utils>=0.0.14",
+    "accelerate>=1.0",
+    "bitsandbytes>=0.50",
 ]
 
 [project.scripts]

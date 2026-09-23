@@ -68,16 +68,22 @@ class BookOutputWriter(OutputWriter):
         self._write_qc_report(pages, watermark_lines)
 
     def _read_pages(self) -> list[dict]:
+        """pages.jsonl is append-only, and a page can legitimately be
+        written more than once (Pass 1, then Pass 2 escalation) -- later
+        records supersede earlier ones for the same page number. The raw,
+        full history stays on disk for debugging; only the latest attempt
+        per page feeds the public book.txt/book.md.
+        """
         if not self.pages_jsonl_path.exists():
             return []
-        pages = []
+        latest_by_page: dict[int, dict] = {}
         with open(self.pages_jsonl_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
-                    pages.append(json.loads(line))
-        pages.sort(key=lambda p: p["page"])
-        return pages
+                    record = json.loads(line)
+                    latest_by_page[record["page"]] = record
+        return [latest_by_page[p] for p in sorted(latest_by_page)]
 
     def _page_body_regions(self, page: dict, watermark_lines: set[str]) -> list[tuple[str, str]]:
         """Returns [(kind, text), ...] for a page, excluding non-content

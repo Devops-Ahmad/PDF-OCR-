@@ -100,6 +100,29 @@ def _get_layout_predictor():
     return _predictor_singleton
 
 
+def shutdown() -> None:
+    """Best-effort cleanup, called between sweeps -- see pipeline.py.
+
+    Does NOT actually free the llama-server's VRAM: found 2026-09-23 that
+    `LlamaCppBackend.stop()` only clears its own Python-side handle
+    ("atexit handler in spawn.py owns cleanup; nothing to do here", per its
+    own source) -- the subprocess and its VRAM live until the whole Python
+    process exits, not on demand. There is no public Surya API to force an
+    earlier kill short of reaching into its private subprocess handle, which
+    isn't worth the fragility. This is fine in practice: the QARI-OCR
+    escalation engine defaults to CPU specifically because this GPU doesn't
+    have room for both models regardless (see engines/qari_engine.py) --
+    this call is kept for whichever future engine/config *can* rely on the
+    VRAM being freed, and to make the in-process predictor state consistent.
+    """
+    global _predictor_singleton
+    if _predictor_singleton is not None:
+        from surya.inference import get_default_manager
+
+        get_default_manager().stop()
+        _predictor_singleton = None
+
+
 def _looks_like_page_number(text: str) -> bool:
     stripped = text.strip()
     if not stripped or len(stripped) > 8:

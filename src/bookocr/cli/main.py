@@ -5,6 +5,15 @@ assumptions -- this must work against any PDF, anywhere.
 
 from __future__ import annotations
 
+import os
+
+# Must be set before torch initializes any CUDA context (the QARI-OCR
+# escalation engine's model load fails on this machine's tight 4GB VRAM
+# without it -- see engines/qari_engine.py). Setting it here, at the true
+# process entry point, guarantees it's in place before any import in the
+# pipeline (surya, torch, etc.) can touch CUDA first.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import json
 import time
 from pathlib import Path
@@ -20,13 +29,33 @@ from bookocr.pipeline import BookPipeline
 console = Console()
 
 
+def _coerce(value: str):
+    """--set values arrive as raw CLI strings; config fields (thresholds,
+    dpi, booleans...) are typed. Coerce the obvious cases rather than making
+    every caller quote --set ocr.primary.device=cpu but also
+    --set quality.thresholds.high=80 silently comparing str >= float and
+    crashing deep in the scorer.
+    """
+    if value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    return value
+
+
 def _parse_sets(pairs: tuple[str, ...]) -> dict:
     out = {}
     for pair in pairs:
         if "=" not in pair:
             raise click.BadParameter(f"--set expects key=value, got {pair!r}")
         key, value = pair.split("=", 1)
-        out[key] = value
+        out[key] = _coerce(value)
     return out
 
 

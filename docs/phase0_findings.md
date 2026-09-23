@@ -1,6 +1,14 @@
 # Phase 0 findings (2026-09-23)
 
-Empirical results from benchmarking the real `sourse/` library on this
+> **Historical log, not the current reference.** This is the chronological
+> record of what was measured and decided during the first build, kept
+> because it explains *why* several defaults exist. For the current
+> state of the project read `README.md`, `docs/ARCHITECTURE.md`,
+> `docs/ENGINES.md`, `docs/BENCHMARKS.md`, `docs/PROBLEMS_AND_SOLUTIONS.md`
+> and `docs/FUTURE_WORK.md`. Some statements below were later superseded;
+> where that happened it is noted in `docs/PROBLEMS_AND_SOLUTIONS.md`.
+
+Empirical results from benchmarking the real source library (101 Arabic-novel PDFs) on this
 machine, gathered before committing to a full 101-book run. This document is
 the record of *why* the pipeline is configured the way it is — update it
 whenever a new finding changes a default.
@@ -30,8 +38,8 @@ Every sample page inspected so far (from 4 different series, different file
 producers: LuraDocument, PDFTron PDFNet, ilovepdf.com) is a clean,
 born-digital-looking raster — even margins, no skew, no speckle noise, no
 bleed-through. These are not photographed scans; they read as flattened
-ebook renders (likely produced to block copy/paste for piracy distribution —
-most carry a `t.me/<channel>` watermark and a "مكتبة" stamp in the page
+ebook renders (most likely exported from a digital source and flattened to images —
+most carry a distributor channel-handle watermark and a library-name stamp in the page
 footer).
 
 **Implication**: the adaptive preprocessing stage (deskew/denoise/binarize)
@@ -41,7 +49,7 @@ still required rather than skipping preprocessing outright — a subset of the
 
 **Implication for layout**: the recurring watermark text is a real
 contamination risk. Confirmed in the Phase 2 test run below: without a
-layout stage, `t.me/ktabpdf` and `مكتبة` end up in the narrative body text of
+layout stage, the channel-handle and library-name stamps end up in the narrative body text of
 every page of the sample book. Layout detection (Phase "layout", Surya) must
 tag these as a `watermark` region, not just `footer`.
 
@@ -74,7 +82,7 @@ installable).
 
 Ran the actual pipeline (rasterize → adaptive preprocess → PaddleOCR Pass 1
 → quality score → JSONL write → SQLite state) against a real book
-(`بساتين عربستان 1 .pdf`, 536 pages):
+(a 536-page book from the library):
 
 - Killed the process mid-run (SIGTERM) after page 16. Re-ran with no flags:
   correctly resumed from page 17, not page 1. Verified via the internal
@@ -96,14 +104,14 @@ Ran the actual pipeline (rasterize → adaptive preprocess → PaddleOCR Pass 1
 
 | Book | Pages | Avg s/page | Mean confidence | Tier |
 |---|---|---|---|---|
-| - أنت لي - | 1,602 | 18.2 | 93.0 | HIGH |
-| الاسود يليق بك | 332 | 8.5 | 93.4 | HIGH |
-| انتهاء 3 (ستيفاني جاربر) | 423 | 6.8 | 95.9 | HIGH |
-| أسطورية 2 (ستيفاني جاربر) | 416 | 6.4 | 95.4 | HIGH |
-| كرافال 1 (ستيفاني جاربر) | 424 | 6.3 | 94.5 | HIGH |
-| قصة اللصوص | 424 | 17.2 | 92.6 | HIGH |
-| آزر | 306 | 9.4 | 93.9 | HIGH |
-| أحببتك أكثر | 328 | 10.0 | 92.0 | HIGH |
+| Book A | 1,602 | 18.2 | 93.0 | HIGH |
+| Book B | 332 | 8.5 | 93.4 | HIGH |
+| Book C | 423 | 6.8 | 95.9 | HIGH |
+| Book D | 416 | 6.4 | 95.4 | HIGH |
+| Book E | 424 | 6.3 | 94.5 | HIGH |
+| Book F | 424 | 17.2 | 92.6 | HIGH |
+| Book G | 306 | 9.4 | 93.9 | HIGH |
+| Book H | 328 | 10.0 | 92.0 | HIGH |
 
 31 pages sampled, 100% HIGH tier at Pass 1 alone — better than the
 architecture proposal's original assumption (10–20% needing escalation).
@@ -127,7 +135,7 @@ A conservative recurring-watermark filter (`postprocess/watermark.py`) is now
 implemented and confirmed working: a line is only stripped from the final
 `book.txt`/`book.md` if it BOTH sits in the bottom band of the page AND
 recurs near-identically across a large share of the book's pages. On the
-4-page test extract above, this correctly removed `t.me/ktabpdf` and `مكتبة`
+4-page test extract above, this correctly removed the channel-handle and library-name stamps
 from every page without touching any narrative text. This runs today, ahead
 of layout detection, because it only needs position + repetition, not a
 trained layout model.
@@ -166,16 +174,8 @@ filter, which still runs as a second, independent line of defense).
 Locked in with `tests/test_layout_assignment.py::test_rtl_line_split_into_multiple_boxes_is_reassembled_in_order`,
 using the real bbox coordinates from that page.
 
-## Open items for the next phase
+## Open items
 
-1. Root-cause the two slow-outlier books before committing to a full-library
-   time estimate (now compounded by layout's added ~2-3s/page).
-2. Sample more books to find out whether any of the 101 are true photographic
-   scans (none seen yet in 12 samples across 5 series).
-3. QARI-OCR escalation tier (Pass 2) is stubbed in config
-   (`ocr.escalation.enabled: false`) but not implemented yet.
-4. The `layout.engine: "none"` fallback path (no torch/surya installed) does
-   not get the RTL row-clustering fix -- it still uses PaddleOCR's raw box
-   order. Worth extracting `_cluster_rows`/`_order_block` as a
-   layout-independent post-process if that path needs to be production-grade
-   too, rather than only the surya path.
+Superseded. The maintained list of what is unfinished lives in
+`docs/FUTURE_WORK.md`; the record of problems found and how each was
+resolved lives in `docs/PROBLEMS_AND_SOLUTIONS.md`.

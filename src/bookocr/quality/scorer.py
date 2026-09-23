@@ -68,8 +68,21 @@ class HeuristicQualityEvaluator(QualityEvaluator):
             warnings.append("near_empty_page")
         if self._has_repeated_line(text):
             warnings.append("repeated_line_detected")
+        if self._has_repeated_ngram(text):
+            warnings.append("degenerate_repetition")
 
         tier = self._tier(score)
+        if "repeated_line_detected" in warnings or "degenerate_repetition" in warnings:
+            # Hard override, not just a weighted-in signal: a page that
+            # degenerated into a repeated cluster of words is never
+            # acceptable no matter how "fluent" the repeated fragment looks
+            # to the other signals (a real generation model failure found on
+            # a real page: an LLM-based OCR engine repeated a 3-word cluster
+            # dozens of times, and those words were real Arabic names --
+            # arabic_char_ratio and dictionary_hit_rate alone would have
+            # scored it as good text).
+            tier = QualityTier.CRITICAL
+
         return QualityReport(score=round(score, 2), tier=tier, signals=signals, warnings=warnings)
 
     def _tier(self, score: float) -> QualityTier:
@@ -126,3 +139,22 @@ class HeuristicQualityEvaluator(QualityEvaluator):
         for line in lines:
             seen[line] = seen.get(line, 0) + 1
         return any(count >= 3 for count in seen.values())
+
+    @staticmethod
+    def _has_repeated_ngram(text: str, n: int = 4, min_repeats: int = 6) -> bool:
+        """Catches degenerate generation loops (a VLM/LLM-based engine
+        cycling the same short word cluster) that `_has_repeated_line` can't
+        see because the repetition sits inside one unbroken blob of text
+        with no line breaks -- exactly the shape a real failure took on a
+        real page (found 2026-09-23, QARI-OCR escalation engine).
+        """
+        words = text.split()
+        if len(words) < n * min_repeats:
+            return False
+        counts: dict[str, int] = {}
+        for i in range(len(words) - n + 1):
+            gram = " ".join(words[i : i + n])
+            counts[gram] = counts.get(gram, 0) + 1
+            if counts[gram] >= min_repeats:
+                return True
+        return False

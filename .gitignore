@@ -12,3 +12,6 @@ __pycache__/
 # Secrets: cloud-fallback API keys must live here, never in config/*.yaml or code.
 .env
 *.key
+
+# Benchmark output (scripts/synth_benchmark.py default --out)
+synth_bench_out/

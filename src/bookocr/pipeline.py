@@ -1,18 +1,27 @@
-"""Orchestrates a single book through the pipeline: rasterize -> preprocess
--> layout detection -> OCR Pass 1 -> quality score -> write. Produces
-exactly two public artifacts, book.txt and book.md, in the caller-specified
-output directory. Everything else written (pages.jsonl, state.db,
-qc_report.json, manifest.json) lives under <output>/.ocr_internal/ and
-exists only to make the tool reliable, resumable, and debuggable -- never as
-a competing product output.
+"""Orchestrates a single book through the pipeline in two sweeps:
 
-Escalation (Pass 2 QARI-OCR, Pass 3 cloud fallback) is later work. Reading
-order is not: layout detection (Surya) runs by default because reading
-order is treated as part of OCR correctness, not optional polish -- see
-docs/phase0_findings.md for the scrambled-dialogue defect this fixes.
-`EscalationPolicy` only ever returns 'accept' or 'flag_for_review' for now;
-the interface is already in place so wiring in an actual secondary engine
-later is additive, not a rewrite.
+  Sweep 1 (every pending page): rasterize -> preprocess -> layout detection
+  -> PaddleOCR -> quality score -> write. Cheap, and per Phase 0 benchmarking
+  (docs/phase0_findings.md) already scores HIGH on most of this library.
+
+  Sweep 2 (only pages sweep 1 scored LOW/CRITICAL, when
+  ocr.escalation.enabled): QARI-OCR, a small Arabic-specialized VLM, re-reads
+  just those pages -- on CPU by default (see engines/qari_engine.py for why:
+  the GPU path doesn't reliably fit in 4GB alongside Surya's own footprint).
+  Sweep 2 only starts after sweep 1 finishes the whole book, both because the
+  escalation set isn't known until then and to keep the two GPU-touching
+  stages from overlapping in time even though they don't currently contend
+  for the same resource.
+
+Produces exactly two public artifacts, book.txt and book.md, in the
+caller-specified output directory. Everything else written (pages.jsonl,
+state.db, qc_report.json, manifest.json) lives under
+<output>/.ocr_internal/ and exists only to make the tool reliable,
+resumable, and debuggable -- never as a competing product output.
+
+Reading order is treated as part of OCR correctness, not optional polish --
+see docs/phase0_findings.md for the scrambled-dialogue defect layout
+detection fixes. Pass 3 cloud fallback is not implemented yet.
 """
 
 from __future__ import annotations
@@ -28,7 +37,7 @@ import structlog
 from bookocr import __version__ as PIPELINE_VERSION
 from bookocr.config import Config
 from bookocr.core.state import StateStore
-from bookocr.core.types import PageResult, PageStatus, QualityTier, Region
+from bookocr.core.types import PageImage, PageResult, PageStatus, QualityTier, Region
 from bookocr.engines.paddle_engine import PaddleOCREngine
 from bookocr.output.writer import BookOutputWriter
 from bookocr.preprocess.adaptive import AdaptivePreprocessor
@@ -93,13 +102,23 @@ class BookPipeline:
         book_log.info("processing_start", total_pages=page_count, pending_pages=len(pending))
 
         with tempfile.TemporaryDirectory(prefix="bookocr_") as work_dir:
+            escalation_candidates: dict[int, PageImage] = {}
             for page_number in pending:
-                self._process_page(source_path, book_id, page_number, Path(work_dir), state, writer, book_log)
+                page_img = self._process_page(source_path, book_id, page_number, Path(work_dir), state, writer, book_log)
+                if page_img is not None:
+                    escalation_candidates[page_number] = page_img
+
+            if escalation_candidates and self.cfg.ocr.escalation.get("enabled"):
+                self._run_escalation_sweep(escalation_candidates, book_id, state, writer, book_log)
 
         title = Path(source_path).stem
         self._finalize(book_id, source_path, page_count, title, state, writer, book_log)
 
-    def _process_page(self, source_path, book_id, page_number, work_dir: Path, state: StateStore, writer: BookOutputWriter, book_log) -> None:
+    def _process_page(self, source_path, book_id, page_number, work_dir: Path, state: StateStore, writer: BookOutputWriter, book_log) -> "PageImage | None":
+        """Returns the (preprocessed) PageImage if this page scored
+        LOW/CRITICAL and escalation is enabled -- the caller collects these
+        for the sweep-2 pass -- else None.
+        """
         page_log = book_log.bind(page=page_number)
         state.set_page_status(book_id, page_number, PageStatus.PROCESSING)
         t0 = datetime.datetime.now(datetime.UTC)
@@ -109,7 +128,7 @@ class BookPipeline:
         except CorruptedPageError as e:
             page_log.warning("page_corrupted", error=str(e))
             state.set_page_status(book_id, page_number, PageStatus.FAILED, error=str(e), bump_retry=True)
-            return
+            return None
 
         analysis = self.preprocessor.analyze(page_img)
         if analysis.get("blank"):
@@ -117,8 +136,9 @@ class BookPipeline:
                 writer, state, book_id, page_number, text="", confidence=100.0, tier=QualityTier.HIGH,
                 status=PageStatus.BLANK, engine_used="none", processing_pass=1, regions=[],
                 warnings=["blank_page"], t0=t0, page_img=page_img,
+                engine_versions={},
             )
-            return
+            return None
 
         page_img = self.preprocessor.apply(page_img, analysis)
 
@@ -127,7 +147,7 @@ class BookPipeline:
         except Exception as e:  # an engine crash on one page must not kill the book
             page_log.error("ocr_engine_failed", error=str(e))
             state.set_page_status(book_id, page_number, PageStatus.FAILED, error=str(e), bump_retry=True)
-            return
+            return None
 
         from bookocr.layout.reading_order import order_lines_rtl
 
@@ -153,25 +173,30 @@ class BookPipeline:
         result.text = "\n".join(r.text for r in result.regions)
 
         report = self.evaluator.score(result, page_img)
-        status = PageStatus.COMPLETED if report.tier in (QualityTier.HIGH, QualityTier.MEDIUM) else PageStatus.LOW_CONFIDENCE
+        needs_escalation = report.tier in (QualityTier.LOW, QualityTier.CRITICAL)
+        status = PageStatus.LOW_CONFIDENCE if needs_escalation else PageStatus.COMPLETED
 
         self._write_and_mark(
             writer, state, book_id, page_number, text=result.text, confidence=report.score, tier=report.tier,
             status=status, engine_used=self.engine.name, processing_pass=1, regions=result.regions,
             warnings=report.warnings, t0=t0, page_img=page_img,
+            engine_versions={self.engine.name: self.engine.version},
         )
         page_log.info("page_done", tier=report.tier.value, confidence=report.score)
+
+        escalation_enabled = self.cfg.ocr.escalation.get("enabled")
+        return page_img if (needs_escalation and escalation_enabled) else None
 
     def _write_and_mark(
         self, writer: BookOutputWriter, state: StateStore, book_id: str, page_number: int, *, text: str,
         confidence: float, tier: QualityTier, status: PageStatus, engine_used: str, processing_pass: int,
-        regions: list[Region], warnings: list[str], t0: datetime.datetime, page_img,
+        regions: list[Region], warnings: list[str], t0: datetime.datetime, page_img, engine_versions: dict[str, str],
     ) -> None:
         duration = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
         result = PageResult(
             book_id=book_id, page_number=page_number, text=text, confidence=confidence, tier=tier,
             status=status, engine_used=engine_used, processing_pass=processing_pass, regions=regions,
-            warnings=warnings, engine_versions={self.engine.name: self.engine.version},
+            warnings=warnings, engine_versions=engine_versions,
             processed_at=datetime.datetime.now(datetime.UTC).isoformat(), duration_s=duration,
             page_width=page_img.width, page_height=page_img.height,
         )
@@ -180,6 +205,59 @@ class BookPipeline:
             book_id, page_number, status, quality_tier=tier.value, confidence=confidence,
             engine_used=engine_used, processing_pass=processing_pass,
         )
+
+    def _run_escalation_sweep(
+        self, candidates: dict[int, PageImage], book_id: str, state: StateStore, writer: BookOutputWriter, book_log
+    ) -> None:
+        """Pass 2: re-read every page sweep 1 scored LOW/CRITICAL with
+        QARI-OCR (CPU by default -- see engines/qari_engine.py). Runs only
+        after sweep 1 finishes the whole book.
+        """
+        from bookocr.engines.qari_engine import QariOCREngine
+        from bookocr.layout.reading_order import order_lines_rtl
+
+        book_log.info("escalation_start", candidate_count=len(candidates))
+
+        if self.layout_detector is not None:
+            from bookocr.layout.surya_layout import shutdown as shutdown_surya
+
+            shutdown_surya()
+
+        escalation_engine = QariOCREngine(self.cfg.ocr.escalation)
+
+        for page_number, page_img in candidates.items():
+            page_log = book_log.bind(page=page_number)
+            state.set_page_status(book_id, page_number, PageStatus.REPROCESSING)
+            t0 = datetime.datetime.now(datetime.UTC)
+
+            try:
+                result = escalation_engine.recognize(page_img)
+            except Exception as e:
+                # Keep the Pass-1 result (already written); a Pass-2 crash on
+                # a hard page must not lose the page's only usable text.
+                page_log.error("escalation_engine_failed", error=str(e))
+                state.set_page_status(book_id, page_number, PageStatus.LOW_CONFIDENCE, error=str(e))
+                continue
+
+            result.regions = order_lines_rtl(result.regions)
+            result.text = "\n".join(r.text for r in result.regions)
+            report = self.evaluator.score(result, page_img)
+
+            # Never silently downgrade: if Pass 2 is still LOW/CRITICAL, flag
+            # for human review rather than looping or pretending it's fine.
+            status = PageStatus.COMPLETED if report.tier in (QualityTier.HIGH, QualityTier.MEDIUM) else PageStatus.REVIEW_REQUIRED
+
+            self._write_and_mark(
+                writer, state, book_id, page_number, text=result.text, confidence=report.score, tier=report.tier,
+                status=status, engine_used=escalation_engine.name, processing_pass=2, regions=result.regions,
+                warnings=report.warnings, t0=t0, page_img=page_img,
+                engine_versions={escalation_engine.name: escalation_engine.version},
+            )
+            page_log.info("escalation_done", tier=report.tier.value, confidence=report.score, status=status.value)
+
+        from bookocr.engines.qari_engine import shutdown as shutdown_qari
+
+        shutdown_qari()
 
     def _finalize(self, book_id, source_path, page_count, title, state: StateStore, writer: BookOutputWriter, book_log) -> None:
         manifest = {

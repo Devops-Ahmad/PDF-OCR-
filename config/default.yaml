@@ -44,10 +44,23 @@ ocr:
     lang: "ar"
     text_detection_model_name: "PP-OCRv5_server_det"
     text_recognition_model_name: "arabic_PP-OCRv5_mobile_rec"
-    device: "cpu"               # no working GPU wheel for this paddlepaddle/CUDA combo yet; see docs/hardware_notes.md
+    device: "cpu"               # no working GPU wheel for this paddlepaddle/CUDA combo; see docs/SETUP.md
   escalation:
-    enabled: false              # Pass 2: QARI-OCR local VLM tier, not wired up yet
+    # Pass 2: QARI-OCR v0.3, re-reads only pages Pass 1 scored LOW/CRITICAL.
+    #
+    # OFF BY DEFAULT while the project is frozen (2026-09-23). It is wired
+    # in and works end to end, but two things stop it being safe as a
+    # default: (1) v0.3 emits HTML (<h2>, <i>, <b>) and the engine does not
+    # yet convert that to plain text/markdown, so escalated pages would
+    # carry raw tags into book.txt; (2) on this machine's CPU it takes
+    # minutes per page, and the GPU path has not been re-measured with v0.3.
+    # See docs/FUTURE_WORK.md ("QARI") for exactly what to finish, and
+    # docs/ENGINES.md for the v0.2.2.1 vs v0.3 story. Turn on with
+    #   ocr --set ocr.escalation.enabled=true convert book.pdf
+    enabled: false
     engine: "qari-ocr"
+    device: "cpu"               # "cuda" needs the Surya layout server NOT running at the same time (it holds ~3GB)
+    max_new_tokens: 1024
   cloud_fallback:
     enabled: false              # Pass 3: opt-in only, never on by default
     provider: "gemini"

@@ -1,7 +1,7 @@
 """PaddleOCR-backed primary recognition engine (Pass 1).
 
 Two non-obvious things this module works around, both discovered during
-Phase 0 benchmarking on 2026-09-23 — see docs/hardware_notes.md:
+Phase 0 benchmarking on 2026-09-23 — see docs/SETUP.md:
 
 1. paddlepaddle>=3.3 crashes on CPU inference with every PP-OCRv5 detection
    model the moment oneDNN is engaged (the default). pyproject.toml pins
