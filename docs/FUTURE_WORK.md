@@ -4,9 +4,14 @@ Everything planned but not done, in priority order. The project is frozen;
 this is the list to pick up when it is unfrozen. Each item says what is
 known, what to do, and how to know it is done.
 
-**The single most important framing:** the pipeline is complete and stable,
+`CURRENT_STATUS.md` is the authoritative evidence ledger and defines the
+97%+ release gate. This file is the implementation backlog for reaching it.
+`OCR_PIPELINE_V2.md` defines the target routed-ensemble architecture and the
+order in which new engines should be integrated and evaluated.
+
+**The single most important framing:** the auditable V2 foundation is built,
 but the primary engine misses the accuracy target (CER 4.3% vs <= 1%;
-punctuation 50%). Everything in section A exists to close that gap.
+punctuation 50%). Everything in section A exists to close that measured gap.
 
 ## A. Close the accuracy gap (highest priority)
 
@@ -54,7 +59,8 @@ and explain the two books that ran at 17-18 s/page.
 
 Currently wired in and **off by default** (`ocr.escalation.enabled: false`).
 To enable safely:
-1. **Convert its HTML output** (`<h2>`, `<i>`, `<b>`, `<br>`) to plain text
+1. HTML output is now detected and prevented from automatic acceptance.
+   **Convert it safely** (`<h2>`, `<i>`, `<b>`, `<br>`) to plain text
    for txt and to Markdown for md. A converter exists in
    `scripts/probes/qari_gpu_probe.py: html_to_text`; move it into
    `engines/qari_engine.py` and keep headings as headings.
@@ -66,11 +72,10 @@ To enable safely:
    and the footer text differs page to page, so the recurring-line filter
    misses it. Crop or mask the bottom band using the layout regions before
    sending the page, or filter with fuzzy matching.
-4. **Real confidence:** mean top-token probability saturates (100.0 on the
-   real page). Use disagreement with Pass 1, length ratio, or repetition
-   checks instead.
-5. Decide the acceptance rule (currently MEDIUM/HIGH accepted, else
-   `REVIEW_REQUIRED`) after A1 gives real numbers.
+4. **Real confidence:** token probability is no longer exposed as native OCR
+   confidence. Calibrate disagreement, length, and repetition evidence.
+5. Decide the acceptance rule after A1 gives real numbers. The current rule
+   rejects HTML and excessive Pass-1/Pass-2 disagreement conservatively.
 6. Measure CPU and GPU seconds per page for v0.3.
 
 ## D. Quality scoring
@@ -104,9 +109,10 @@ Declared in config but not implemented: `preprocess.upscale`,
 `preprocess.binarize.method`, `triage.orientation_check` (needs Tesseract,
 not installed), `rasterize.image_format`, `concurrency.cpu_workers` and
 `gpu_stage_batch_size` (everything is sequential), `ocr.cloud_fallback.*`.
-Interfaces defined but unused: `EscalationPolicy`, `Validator`, `JobManager`.
-Either implement or delete them; a whole-book `Validator` (page-count match,
-gaps, duplicates) is worth having before large runs.
+`EscalationPolicy` and `Validator` are now implemented. `JobManager` remains
+an interface only. Also pending: move layout to an isolated worker, give each
+heavy engine its own locked environment/container, and record peak memory,
+prompt revision, and decoder parameters.
 
 ## G. Scale (only when running the full library)
 
@@ -119,14 +125,16 @@ gaps, duplicates) is worth having before large runs.
   default) was designed, and never implemented. Pricing at the time was about
   $0.30 per million input tokens for Gemini 2.5 Flash; verify current pricing.
 - Housekeeping: a lockfile (`uv lock`) for reproducible installs (the CUDA-13
-  torch pulled today is a moving target), and a CI job for the unit tests.
+  torch pulled today is a moving target). CI configuration now exists; its
+  remote execution status still needs to be verified.
 
 ## H. Tests still missing
 
-End-to-end test on a small fixture PDF, writer output-format tests
-(`book.txt`/`book.md` structure), rasterizer tests (corrupt page), resume
-test after the refactor with a real interrupted run, and a regression test on
-the synthetic benchmark thresholds.
+Now present: a fake-engine end-to-end fixture, native text-layer bypass test,
+writer finalisation, registry worker, artifact/routing, and validator tests.
+Still missing: detailed `book.txt`/`book.md` formatting cases, rasterizer
+corruption tests, timeout/restart fault injection, a real interrupted-run V2
+resume test, and synthetic benchmark threshold regression.
 
 ## I. Known limitations to keep in mind
 

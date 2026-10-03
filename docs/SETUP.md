@@ -98,7 +98,12 @@ from the environment (`.env.example` documents it).
 ## 7. How to resume development
 
 1. Read `README.md` (status and results), then `docs/FUTURE_WORK.md`.
-2. Set up the environment (section 2) and confirm `pytest` gives 26 passed.
+2. Set up the environment (section 2), run the current tests, and record the
+   result. The verified 2026-10-03 command is
+   `PYTHONPATH=src .venv/bin/python -m pytest -q` and produced **40 passed**.
+   `PYTHONPATH=src` is currently necessary because this reused virtual
+   environment has stale editable-install metadata pointing to an older
+   checkout; reinstalling with `uv pip install -e .` should remove that need.
 3. Run the synthetic benchmark to reproduce the baseline
    (CER 4.32% / WER 16.84% / punctuation 50.2%). If that reproduces, the
    environment is healthy.
@@ -108,7 +113,7 @@ from the environment (`.env.example` documents it).
 5. Keep `docs/BENCHMARKS.md` updated with every new measurement, and add
    any new problem to `docs/PROBLEMS_AND_SOLUTIONS.md`.
 
-## 8. Status of the working tree when frozen (2026-09-23)
+## 8. Historical status when frozen (2026-09-23)
 
 - All code committed; `pytest`: 26 passed.
 - Default behaviour: Pass 1 (PaddleOCR) + Surya layout + RTL ordering +
@@ -116,3 +121,7 @@ from the environment (`.env.example` documents it).
 - No background processes needed; the Surya server is started and killed per
   run.
 - Nothing was deleted; obsolete model caches are still on disk.
+
+For the current state, including pending safety hardening and the accuracy
+gate, read `CURRENT_STATUS.md` rather than treating this historical snapshot
+as current verification.

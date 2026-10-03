@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 
-from bookocr.core.types import EngineResult, PageImage, PageResult, QualityReport, Region
+from bookocr.core.types import EngineResult, PageImage, PageResult, QualityReport, Region, RoutingAction, ValidationReport
 
 
 class DocumentSource(ABC):
@@ -89,9 +89,8 @@ class QualityEvaluator(ABC):
 
 class EscalationPolicy(ABC):
     @abstractmethod
-    def next_action(self, report: QualityReport, processing_pass: int) -> str:
-        """Returns one of: 'accept', 'reprocess_local', 'escalate_cloud',
-        'flag_for_review'. Owns the multi-pass decision logic so it can be
+    def next_action(self, report: QualityReport, processing_pass: int, evidence: dict | None = None) -> RoutingAction:
+        """Returns a typed routing action. Owns the multi-pass decision logic so it can be
         tuned/replaced without touching engines or scoring.
         """
         ...
@@ -107,7 +106,7 @@ class OutputWriter(ABC):
 
 class Validator(ABC):
     @abstractmethod
-    def validate_book(self, book_id: str) -> QualityReport:
+    def validate_book(self, book_id: str) -> ValidationReport:
         """Post-hoc, whole-book sanity check: page-count match, duplicate
         pages, monotonic page numbers, no gaps — run once processing
         finishes, before the book is considered done.

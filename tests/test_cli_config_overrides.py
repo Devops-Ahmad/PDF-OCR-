@@ -1,4 +1,7 @@
+from pydantic import ValidationError
+
 from bookocr.cli.main import _parse_sets
+from bookocr.config import load_config
 
 
 def test_numeric_overrides_are_coerced_not_left_as_strings():
@@ -18,3 +21,12 @@ def test_boolean_overrides_are_coerced():
 def test_string_overrides_pass_through():
     out = _parse_sets(("ocr.primary.device=cpu",))
     assert out["ocr.primary.device"] == "cpu"
+
+
+def test_unknown_top_level_config_key_is_rejected():
+    try:
+        load_config(cli_overrides={"typoed_setting": True})
+    except ValidationError as error:
+        assert "typoed_setting" in str(error)
+    else:
+        raise AssertionError("unknown configuration keys must not be ignored")

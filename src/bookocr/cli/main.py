@@ -25,6 +25,7 @@ from rich.table import Table
 from bookocr.config import load_config
 from bookocr.core.state import StateStore
 from bookocr.pipeline import BookPipeline
+from bookocr.validation import WholeBookValidator
 
 console = Console()
 
@@ -140,12 +141,15 @@ def inspect(ctx, output_dir, page):
 
     if page is not None:
         jsonl_path = internal_dir / "pages.jsonl"
+        latest_record = None
         with open(jsonl_path, encoding="utf-8") as f:
             for line in f:
                 record = json.loads(line)
                 if record["page"] == page:
-                    console.print_json(data=record)
-                    return
+                    latest_record = record
+        if latest_record is not None:
+            console.print_json(data=latest_record)
+            return
         console.print(f"[yellow]Page {page} not found in {jsonl_path}[/yellow]")
         return
 
@@ -155,6 +159,63 @@ def inspect(ctx, output_dir, page):
         return
     with open(qc_path, encoding="utf-8") as f:
         console.print_json(data=json.load(f))
+
+
+@cli.command()
+@click.argument("output_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("--page", type=int, default=None, help="Show the V2 audit bundle for one page")
+@click.pass_context
+def audit(ctx, output_dir, page):
+    """Inspect provenance, routing decisions, candidates, and validation."""
+    cfg = ctx.obj["config"]
+    internal_dir = Path(output_dir) / cfg.output.internal_dirname
+    if page is None:
+        payload = {}
+        for name in ("manifest.json", "validation_report.json", "qc_report.json"):
+            path = internal_dir / name
+            payload[name.removesuffix(".json")] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        events_path = internal_dir / "events.jsonl"
+        payload["event_count"] = (
+            sum(1 for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip())
+            if events_path.exists()
+            else 0
+        )
+        console.print_json(data=payload)
+        return
+
+    page_dir = internal_dir / "pages" / f"{page:06d}"
+    if not page_dir.exists():
+        raise click.ClickException(f"No V2 audit directory for page {page}: {page_dir}")
+    payload = {"page": page, "candidates": {}}
+    for name in ("triage.json", "layout.json", "decision.json"):
+        path = page_dir / name
+        payload[name.removesuffix(".json")] = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    for path in sorted((page_dir / "candidates").glob("*.json")):
+        payload["candidates"][path.name] = json.loads(path.read_text(encoding="utf-8"))
+    state = StateStore(internal_dir / "state.db")
+    payload["attempts"] = state.page_attempts("book", page)
+    console.print_json(data=payload)
+
+
+@cli.command("validate")
+@click.argument("output_dir", type=click.Path(exists=True, file_okay=False))
+@click.pass_context
+def validate_output(ctx, output_dir):
+    """Re-run whole-book integrity validation without running OCR."""
+    cfg = ctx.obj["config"]
+    internal_dir = Path(output_dir) / cfg.output.internal_dirname
+    manifest_path = internal_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise click.ClickException(f"Missing manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    report = WholeBookValidator(
+        internal_dir,
+        int(manifest["page_count"]),
+        output_dir=output_dir,
+    ).validate_book(manifest.get("book_id", "book"))
+    console.print_json(data=report.to_dict())
+    if not report.valid:
+        raise click.ClickException("Output failed integrity validation")
 
 
 @cli.command()
@@ -171,6 +232,7 @@ def benchmark(ctx, directory, limit, pages_per_book):
 
     cfg = ctx.obj["config"]
     pipeline = BookPipeline(cfg)
+    engine = pipeline.engine_registry.create(cfg.ocr.primary_engine, cfg.ocr.primary, cfg.ocr.execution)
 
     pdfs = sorted(Path(directory).rglob("*.pdf"))[:limit]
     table = Table(title="Benchmark")
@@ -179,37 +241,40 @@ def benchmark(ctx, directory, limit, pages_per_book):
 
     import tempfile
 
-    for pdf in pdfs:
-        try:
-            with pymupdf.open(str(pdf)) as doc:
-                total_pages = doc.page_count
-        except Exception as e:
-            console.print(f"[red]Skipping unreadable {pdf}: {e}[/red]")
-            continue
+    try:
+        for pdf in pdfs:
+            try:
+                with pymupdf.open(str(pdf)) as doc:
+                    total_pages = doc.page_count
+            except Exception as e:
+                console.print(f"[red]Skipping unreadable {pdf}: {e}[/red]")
+                continue
 
-        sample_pages = sorted(set(min(total_pages, p) for p in range(20, 20 + pages_per_book * 40, 40)))[:pages_per_book]
+            sample_pages = sorted(set(min(total_pages, p) for p in range(20, 20 + pages_per_book * 40, 40)))[:pages_per_book]
 
-        durations, confidences, tiers = [], [], {}
-        with tempfile.TemporaryDirectory(prefix="bookocr_bench_") as work_dir:
-            for pno in sample_pages:
-                t0 = time.time()
-                page_img = pipeline.rasterizer.render_page(str(pdf), pno, cfg.rasterize.dpi, work_dir)
-                analysis = pipeline.preprocessor.analyze(page_img)
-                if analysis.get("blank"):
-                    continue
-                page_img = pipeline.preprocessor.apply(page_img, analysis)
-                result = pipeline.engine.recognize(page_img)
-                report = pipeline.evaluator.score(result, page_img)
-                durations.append(time.time() - t0)
-                confidences.append(report.score)
-                tiers[report.tier.value] = tiers.get(report.tier.value, 0) + 1
+            durations, confidences, tiers = [], [], {}
+            with tempfile.TemporaryDirectory(prefix="bookocr_bench_") as work_dir:
+                for pno in sample_pages:
+                    t0 = time.time()
+                    page_img = pipeline.rasterizer.render_page(str(pdf), pno, cfg.rasterize.dpi, work_dir)
+                    analysis = pipeline.preprocessor.analyze(page_img)
+                    if analysis.get("blank"):
+                        continue
+                    page_img = pipeline.preprocessor.apply(page_img, analysis)
+                    result = engine.recognize(page_img)
+                    report = pipeline.evaluator.score(result, page_img)
+                    durations.append(time.time() - t0)
+                    confidences.append(report.score)
+                    tiers[report.tier.value] = tiers.get(report.tier.value, 0) + 1
 
-        avg_dt = sum(durations) / len(durations) if durations else 0
-        avg_conf = sum(confidences) / len(confidences) if confidences else 0
-        table.add_row(
-            pdf.name, str(total_pages), str(len(durations)), f"{avg_dt:.1f}",
-            f"{avg_conf:.1f}", ", ".join(f"{k}:{v}" for k, v in tiers.items()),
-        )
+            avg_dt = sum(durations) / len(durations) if durations else 0
+            avg_conf = sum(confidences) / len(confidences) if confidences else 0
+            table.add_row(
+                pdf.name, str(total_pages), str(len(durations)), f"{avg_dt:.1f}",
+                f"{avg_conf:.1f}", ", ".join(f"{k}:{v}" for k, v in tiers.items()),
+            )
+    finally:
+        pipeline.engine_registry.close_all()
 
     console.print(table)
 

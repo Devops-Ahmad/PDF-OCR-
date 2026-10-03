@@ -15,3 +15,7 @@ __pycache__/
 
 # Benchmark output (scripts/synth_benchmark.py default --out)
 synth_bench_out/
+
+# Local copyrighted source PDFs used only for OCR benchmarking. Never track
+# these inputs or derived benchmark artifacts in Git.
+sources/

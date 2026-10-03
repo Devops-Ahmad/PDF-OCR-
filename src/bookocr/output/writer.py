@@ -21,7 +21,9 @@ pages.jsonl reproduces the product outputs without re-running OCR.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from bookocr.core.interfaces import OutputWriter
 from bookocr.core.types import PageResult
@@ -46,10 +48,29 @@ class BookOutputWriter(OutputWriter):
     def write_page(self, result: PageResult) -> None:
         with open(self.pages_jsonl_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(result.to_jsonl_record(), ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+    @staticmethod
+    def _write_json_atomic(path: Path, value: dict) -> None:
+        with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as f:
+            json.dump(value, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+            temp_path = Path(f.name)
+        temp_path.replace(path)
+
+    @staticmethod
+    def _write_text_atomic(path: Path, text: str) -> None:
+        with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+            temp_path = Path(f.name)
+        temp_path.replace(path)
 
     def finalize_book(self, book_id: str, manifest: dict) -> None:
-        with open(self.internal_dir / "manifest.json", "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        self._write_json_atomic(self.internal_dir / "manifest.json", manifest)
 
         pages = self._read_pages()
         watermark_lines = (
@@ -109,8 +130,7 @@ class BookOutputWriter(OutputWriter):
             marker = self.txt_marker.format(page=page["page"])
             body = "\n".join(text for _, text in self._page_body_regions(page, watermark_lines))
             chunks.append(f"{marker}\n\n{body}\n")
-        with open(self.output_dir / "book.txt", "w", encoding="utf-8") as f:
-            f.write("\n\n".join(chunks) + "\n")
+        self._write_text_atomic(self.output_dir / "book.txt", "\n\n".join(chunks) + "\n")
 
     def _write_md(self, pages: list[dict], watermark_lines: set[str], title: str) -> None:
         chunks = [f"# {title}\n"]
@@ -118,8 +138,7 @@ class BookOutputWriter(OutputWriter):
             heading = self.md_heading.format(page=page["page"])
             paragraphs = [f"### {text}" if kind == "heading" else text for kind, text in self._page_body_regions(page, watermark_lines)]
             chunks.append(f"{heading}\n\n" + "\n\n".join(paragraphs) + "\n")
-        with open(self.output_dir / "book.md", "w", encoding="utf-8") as f:
-            f.write("\n".join(chunks) + "\n")
+        self._write_text_atomic(self.output_dir / "book.md", "\n".join(chunks) + "\n")
 
     def _write_qc_report(self, pages: list[dict], watermark_lines: set[str]) -> None:
         tier_counts: dict[str, int] = {}
@@ -139,5 +158,4 @@ class BookOutputWriter(OutputWriter):
             "flagged_count": len(flagged),
             "watermark_lines_filtered": sorted(watermark_lines),
         }
-        with open(self.internal_dir / "qc_report.json", "w", encoding="utf-8") as f:
-            json.dump(report, f, ensure_ascii=False, indent=2)
+        self._write_json_atomic(self.internal_dir / "qc_report.json", report)

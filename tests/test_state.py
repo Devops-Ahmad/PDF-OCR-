@@ -4,7 +4,7 @@ from bookocr.core.types import PageStatus
 
 def test_resume_semantics(tmp_path):
     store = StateStore(tmp_path / "state.db")
-    store.register_book("book1", "/fake/path.pdf", page_count=5, pipeline_version="0.1.0", config_hash="abc")
+    store.register_book("book1", "/fake/path.pdf", page_count=5, pipeline_version="0.1.0", config_hash="abc", source_fingerprint="v1")
 
     assert store.pending_pages("book1") == [1, 2, 3, 4, 5]
 
@@ -26,10 +26,22 @@ def test_resume_semantics(tmp_path):
 
 def test_register_book_is_idempotent(tmp_path):
     store = StateStore(tmp_path / "state.db")
-    store.register_book("book1", "/fake/path.pdf", page_count=3, pipeline_version="0.1.0", config_hash="abc")
+    store.register_book("book1", "/fake/path.pdf", page_count=3, pipeline_version="0.1.0", config_hash="abc", source_fingerprint="v1")
     store.set_page_status("book1", 1, PageStatus.COMPLETED)
 
     # Re-registering (e.g. a second `process` invocation) must not wipe
     # already-recorded progress.
-    store.register_book("book1", "/fake/path.pdf", page_count=3, pipeline_version="0.1.0", config_hash="abc")
+    store.register_book("book1", "/fake/path.pdf", page_count=3, pipeline_version="0.1.0", config_hash="abc", source_fingerprint="v1")
     assert store.pending_pages("book1") == [2, 3]
+
+
+def test_register_book_rejects_different_source_or_revision(tmp_path):
+    store = StateStore(tmp_path / "state.db")
+    store.register_book("book1", "/first.pdf", page_count=3, pipeline_version="0.1.0", config_hash="abc", source_fingerprint="v1")
+
+    import pytest
+
+    with pytest.raises(ValueError, match="different PDF"):
+        store.register_book("book1", "/second.pdf", page_count=3, pipeline_version="0.1.0", config_hash="abc", source_fingerprint="v1")
+    with pytest.raises(ValueError, match="source PDF has changed"):
+        store.register_book("book1", "/first.pdf", page_count=3, pipeline_version="0.1.0", config_hash="abc", source_fingerprint="v2")

@@ -46,6 +46,8 @@ checkpoint has itself been VRAM-profiled on GPU.
 
 from __future__ import annotations
 
+import re
+
 from bookocr.core.interfaces import OCREngine
 from bookocr.core.types import EngineResult, PageImage, Region
 
@@ -138,10 +140,23 @@ class QariOCREngine(OCREngine):
         input_len = inputs.input_ids.shape[1]
         generated_ids = out.sequences[:, input_len:]
         output_text = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
-        confidence = self._mean_token_confidence(out.scores, generated_ids[0])
+        token_probability = self._mean_token_confidence(out.scores, generated_ids[0])
+        warnings = ["native_confidence_unavailable"]
+        if re.search(r"<\s*/?\s*[A-Za-z][^>]*>", output_text):
+            warnings.append("html_output_unconverted")
 
-        region = Region(kind="body", bbox=(0.0, 0.0, float(page.width), float(page.height)), text=output_text, confidence=confidence, reading_order=0)
-        return EngineResult(text=output_text, confidence=confidence, engine_name=self.name, engine_version=self.version, regions=[region], raw={})
+        region = Region(kind="body", bbox=(0.0, 0.0, float(page.width), float(page.height)), text=output_text, confidence=None, reading_order=0)
+        return EngineResult(
+            text=output_text,
+            confidence=None,
+            engine_name=self.name,
+            engine_version=self.version,
+            regions=[region],
+            raw={"mean_generated_token_probability": token_probability},
+            model_revision=_MODEL_NAME,
+            output_format="html" if "html_output_unconverted" in warnings else "text",
+            warnings=warnings,
+        )
 
     @staticmethod
     def _mean_token_confidence(scores, generated_ids) -> float:

@@ -91,4 +91,7 @@ class PaddleOCREngine(OCREngine):
             engine_version=self.version,
             regions=out_regions,
             raw={"duration_s": duration, "line_count": len(lines)},
+            model_revision=f"{self.cfg.get('text_detection_model_name', 'auto')}+{self.cfg.get('text_recognition_model_name', self.cfg.get('lang', 'auto'))}",
+            output_format="lines",
+            runtime_s=duration,
         )

@@ -50,7 +50,10 @@ class HeuristicQualityEvaluator(QualityEvaluator):
         warnings: list[str] = []
 
         signals = {
-            "engine_confidence": result.confidence,
+            # A missing native confidence is evidence absence, not zero
+            # accuracy. Keep the neutral midpoint so other observable signals
+            # drive routing without fabricating VLM certainty.
+            "engine_confidence": result.confidence if result.confidence is not None else 50.0,
             "arabic_char_ratio": self._arabic_char_ratio(text) * 100,
             "dictionary_hit_rate": self._dictionary_hit_rate(text) * 100,
             "length_anomaly": self._length_score(text) * 100,
@@ -66,6 +69,8 @@ class HeuristicQualityEvaluator(QualityEvaluator):
             warnings.append("high_garbage_symbol_density")
         if len(text.strip()) < 20:
             warnings.append("near_empty_page")
+        if result.confidence is None:
+            warnings.append("native_confidence_unavailable")
         if self._has_repeated_line(text):
             warnings.append("repeated_line_detected")
         if self._has_repeated_ngram(text):

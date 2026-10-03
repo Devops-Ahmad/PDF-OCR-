@@ -13,6 +13,13 @@ rasterize:
 triage:
   blank_page_ink_ratio_threshold: 0.002   # below this fraction of non-white pixels -> BLANK
   orientation_check: true                  # use Tesseract OSD if available; skip silently if not installed
+  # Reuse a trustworthy native PDF text layer instead of OCR. The gate is
+  # deliberately conservative; partial/junk layers fall through to OCR.
+  prefer_usable_text_layer: true
+  text_layer_min_chars: 80
+  text_layer_min_words: 12
+  text_layer_min_arabic_ratio: 0.5
+  text_layer_max_replacement_ratio: 0.01
 
 preprocess:
   # Every step below is conditional: it only runs if the page's own analysis
@@ -40,6 +47,18 @@ layout:
 
 ocr:
   primary_engine: "paddleocr"
+  execution:
+    # Each OCR model lives in a persistent child process. This isolates model
+    # globals and lets the orchestrator reclaim RAM/VRAM by closing a worker.
+    # Use "in_process" only for debugging or constrained test fixtures.
+    mode: "process"             # process | in_process
+    start_method: "spawn"
+    primary_timeout_s: 900
+    escalation_timeout_s: 3600
+  routing:
+    # A second engine that differs radically from Pass 1 is not silently
+    # accepted merely because its own heuristic score is high.
+    max_normalized_disagreement: 0.35
   primary:
     lang: "ar"
     text_detection_model_name: "PP-OCRv5_server_det"

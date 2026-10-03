@@ -1,7 +1,8 @@
 # Architecture
 
-Everything here describes the code as committed. File references are
-relative to `src/bookocr/`.
+This document describes the current working tree as verified on 2026-10-03.
+File references are relative to `src/bookocr/`. The exact V2 change ledger is
+in [`V2_IMPLEMENTATION_LOG.md`](V2_IMPLEMENTATION_LOG.md).
 
 ## 1. The contract
 
@@ -17,31 +18,17 @@ uncertainty is recorded internally and pages are flagged instead.
 
 ## 2. Pipeline workflow
 
-`pipeline.py: BookPipeline.convert` runs one book in two sweeps.
+`pipeline.py: BookPipeline.convert` runs one book as a routed, auditable job.
 
 ```
-PDF
- |  register book + pages in <out>/.ocr_internal/state.db  (all pages PENDING)
- v
-SWEEP 1: for every page not yet COMPLETED/BLANK/REVIEW_REQUIRED
-   rasterize (PyMuPDF, 300 dpi PNG, temp dir)
-   -> analyze + conditionally preprocess (blank? skew? noise? contrast?)
-   -> PaddleOCR: detect lines + recognise text (CPU)         [Pass 1]
-   -> Surya layout: typed regions + block reading order (GPU) [layout]
-   -> assign each OCR line to the layout block containing it,
-      order lines right-to-left within rows                   [reading order]
-   -> quality score 0-100 -> tier HIGH/MEDIUM/LOW/CRITICAL
-   -> append record to pages.jsonl, update state.db
-   pages scoring LOW/CRITICAL are remembered for sweep 2
- |
-SWEEP 2 (only if ocr.escalation.enabled, default OFF):
-   QARI-OCR re-reads the remembered pages                     [Pass 2]
-   accept if the new score is MEDIUM/HIGH, else REVIEW_REQUIRED
- |
-FINALIZE
-   read pages.jsonl (latest record per page wins)
-   detect recurring watermark lines across the whole book
-   write book.txt, book.md, manifest.json, qc_report.json
+PDF -> content SHA-256 + state registration
+    -> render/analyse each pending page
+    -> use a native PDF text layer only if configured completeness/language
+       gates pass; otherwise call the primary engine through EngineRegistry
+    -> layout + RTL order -> evidence + quality report -> routing decision
+    -> optional Pass 2 in a separate persistent worker after primary closes
+    -> append canonical record and immutable candidate/decision artifacts
+    -> atomic book.txt/book.md generation -> whole-book validation
 ```
 
 Blank pages (almost no ink) are recorded as `BLANK` and skipped by OCR.
@@ -68,8 +55,13 @@ crash, or `FAILED`, or `LOW_CONFIDENCE`, is picked up again on resume.
 | Escalation OCR | `engines/qari_engine.py` | QARI v0.3 (Qwen2-VL-2B fine-tune). Optional. |
 | Quality scorer | `quality/scorer.py` | Heuristic ensemble (section 6). |
 | Watermark filter | `postprocess/watermark.py` | Book-level recurring-line detector (section 7). |
-| Output writer | `output/writer.py` | Append-only `pages.jsonl`; derives txt/md/qc at finalize. |
-| State store | `core/state.py` | SQLite, one database per output directory. |
+| Engine registry | `core/engine_registry.py` | Built-in adapter registry; persistent `spawn` process or in-process test runner; timeout and shutdown. |
+| Native text | `rasterize/text_layer.py` | Per-page extraction with minimum character/word/Arabic ratio and replacement-character gates. |
+| Evidence/router | `quality/evidence.py`, `quality/routing.py` | Independent evidence plus conservative accept/reprocess/review decisions. |
+| Output writer | `output/writer.py` | Append-only `pages.jsonl`; derives txt/md/qc atomically at finalize. |
+| Artifact store | `core/artifacts.py` | Atomic per-page JSON plus fsynced lifecycle events. |
+| State store | `core/state.py` | SQLite book/page state and per-engine attempts, one database per output directory. |
+| Validator | `validation.py` | Checks canonical page coverage, states, and public outputs before completion. |
 | Metrics | `eval/metrics.py` | CER/WER (strict and loose), punctuation recall. |
 | Interfaces | `core/interfaces.py` | Abstract base classes for every replaceable stage. Partly unused, see section 10. |
 
@@ -131,6 +123,9 @@ and headings stay in.
 0-100 score with configured weights (engine confidence 0.5, Arabic-character
 ratio 0.2, function-word hit rate 0.15, length 0.1, garbage-symbol ratio
 0.05). Tiers: HIGH >= 80, MEDIUM >= 60, LOW >= 30, else CRITICAL.
+When an engine has no native confidence, the scorer uses a neutral routing
+value of 50 and records `native_confidence_unavailable`; it does not present
+token probability or the neutral value as OCR accuracy.
 
 Warnings recorded: `low_arabic_content`, `high_garbage_symbol_density`,
 `near_empty_page`, `repeated_line_detected`, `degenerate_repetition`.
@@ -172,10 +167,17 @@ it there (see FUTURE_WORK).
   book.txt                  public
   book.md                   public
   .ocr_internal/
-    pages.jsonl             append-only raw record per page (source of truth for text)
-    state.db                SQLite: per-page status, tier, confidence, engine, retries, error
-    manifest.json           book id/title, source path, page count, pipeline version, config hash, engine versions
-    qc_report.json          tier distribution, mean/min confidence, flagged pages, filtered watermark lines
+    pages.jsonl             append-only canonical page records
+    state.db                book/page state plus attempts
+    events.jsonl            append-only, fsynced lifecycle events
+    manifest.json           schema v2, content SHA, config/code/model provenance
+    qc_report.json          aggregate routing evidence, never accuracy
+    validation_report.json whole-book integrity result
+    pages/000001/
+      triage.json           raster and text-layer analysis
+      layout.json           canonical regions and provider
+      candidates/*.json     untouched engine results + evidence
+      decision.json         selected result and auditable reasons
 ```
 
 - **Page is the unit of work.** A record is appended the moment a page is
@@ -187,6 +189,9 @@ it there (see FUTURE_WORK).
   book.txt/md are always regenerable from it without re-running OCR.
 - **SQLite, one file per output directory**, not one global database, so the
   tool has no shared state and works from any location.
+- **Output provenance is enforced.** The state records a streamed SHA-256 of
+  source content as well as the legacy metadata fingerprint. Reusing an
+  output directory for different content fails before page processing.
 - **Reproducibility.** `manifest.json` stores the config hash, pipeline
   version and engine versions. Determinism is as good as the engines allow.
 - Rasterized page images live only in a temp directory for the run.
@@ -212,14 +217,9 @@ paragraph reconstruction, so a novel paragraph appears as several lines
 
 ## 10. Interfaces and what is actually wired
 
-`core/interfaces.py` defines the replaceable-component contract:
-`DocumentSource, Rasterizer, Preprocessor, LayoutDetector, OCREngine,
-QualityEvaluator, EscalationPolicy, OutputWriter, Validator, JobManager`.
-Used today: `DocumentSource, Rasterizer, Preprocessor, LayoutDetector,
-OCREngine, QualityEvaluator, OutputWriter`. **Defined but not used:**
-`EscalationPolicy` (the accept/escalate decision is inlined in
-`pipeline.py`), `Validator` (no whole-book validation pass), `JobManager`
-(no queue; one book per invocation).
+`core/interfaces.py` defines replaceable contracts. `EscalationPolicy` and
+`Validator` are now wired through concrete implementations. `JobManager`
+remains an interface only: the CLI still runs one book per invocation.
 
 ## 11. Configuration
 
@@ -238,6 +238,8 @@ real bug otherwise). Declared but unused keys: `preprocess.upscale`,
 | `ocr convert PDF [--output DIR] [--force]` | The product. Resumes automatically; `--force` reprocesses every page. |
 | `ocr status DIR` | Per-status page counts and failed pages for a converted book. |
 | `ocr inspect DIR [--page N]` | The qc report, or one page's raw record. Debug only. |
+| `ocr audit DIR [--page N]` | Manifest/validation/QC/events, or a page's triage/layout/candidates/decision/attempts. |
+| `ocr validate DIR` | Re-run integrity validation without OCR. |
 | `ocr benchmark DIR [--limit N --pages-per-book N]` | Samples PDFs under a directory and prints throughput/quality. Console only. |
 
 Global options before the subcommand: `--config PATH`, `--set key=value`.

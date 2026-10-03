@@ -1,9 +1,11 @@
 # Benchmarks, measurements and test results
 
-All numbers were measured on 2026-09-23 on the machine described in
-`ENGINES.md`. Where something was estimated or eyeballed rather than
-measured, it says so. **The only ground-truth accuracy numbers in this
-project are the synthetic-benchmark ones (section 3).**
+Unless a section says otherwise, the numbers below were measured on
+2026-09-23 on the machine described in `ENGINES.md`. Where something was
+estimated or eyeballed rather than measured, it says so. **The only
+checked-in ground-truth accuracy numbers are the synthetic-benchmark ones
+(section 3).** See `CURRENT_STATUS.md` for the current evidence verdict and
+the 97%+ acceptance gate.
 
 ## 1. Library survey (101 PDFs, done with pdfinfo / pdftotext)
 
@@ -149,7 +151,15 @@ failure rate over a large run, reprocessing rate on a realistic library.
 
 ## 8. Unit tests
 
+Historical committed baseline on 2026-09-23:
 `python -m pytest tests/ -q` -> **26 passed in 0.81 s**.
+
+Current model-free verification on 2026-10-03:
+`PYTHONPATH=src .venv/bin/python -m pytest -q` -> **40 passed in 1.33 s**.
+This validates contracts, state/artifacts, process-worker mechanics, routing,
+text-layer gates, whole-book validation, writer behavior, and a fake-engine
+end-to-end pipeline. It does **not** run or measure PaddleOCR, QARI, Surya, or
+any new OCR model, and therefore changes no accuracy number in this file.
 
 | File | Tests | Covers |
 |---|---|---|
@@ -160,7 +170,12 @@ failure rate over a large run, reprocessing rate on a realistic library.
 | `test_quality_scorer.py` | 3 | word-cluster repetition forces CRITICAL, repeated line forces CRITICAL, normal prose not flagged |
 | `test_cli_config_overrides.py` | 3 | `--set` coerces ints, floats, bools; strings pass through |
 | `test_metrics.py` | 6 | CER/WER definitions, whitespace, loose vs strict, punctuation recall |
+| `test_writer.py` | 1 | latest page record wins; txt/md/QC artifacts are generated |
+| `test_v2_core.py` | 7 | content SHA-256, attempts, audit artifacts, conservative routing, validator including stuck attempts, PDF text-layer gates |
+| `test_engine_registry.py` | 2 | in-process and persistent spawned-process engine runners |
+| `test_pipeline_v2.py` | 2 | fake-engine conversion plus proof that a usable PDF text layer bypasses OCR startup |
 
-**Not covered by any test:** the pipeline end to end (needs models), the
-Paddle/Surya/QARI engines themselves, the writer's txt/md formatting, and
-the rasterizer. The end-to-end checks in section 7 were manual.
+**Not covered by these tests:** real Paddle/Surya/QARI inference, GPU/model
+lifecycles, OCR accuracy, large-book performance, or process isolation across
+separate dependency environments. Those require explicit model/benchmark
+runs and remain unmeasured.

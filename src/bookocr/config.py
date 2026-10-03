@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
 
@@ -33,62 +33,75 @@ def _set_path(d: dict, dotted_key: str, value: Any) -> None:
     cur[parts[-1]] = value
 
 
-class RasterizeConfig(BaseModel):
+class StrictConfigModel(BaseModel):
+    """Reject misspelled top-level configuration keys instead of ignoring them."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RasterizeConfig(StrictConfigModel):
     dpi: int = 300
     image_format: str = "png"
 
 
-class TriageConfig(BaseModel):
+class TriageConfig(StrictConfigModel):
     blank_page_ink_ratio_threshold: float = 0.002
     orientation_check: bool = True
+    prefer_usable_text_layer: bool = True
+    text_layer_min_chars: int = 80
+    text_layer_min_words: int = 12
+    text_layer_min_arabic_ratio: float = 0.5
+    text_layer_max_replacement_ratio: float = 0.01
 
 
-class PreprocessConfig(BaseModel):
+class PreprocessConfig(StrictConfigModel):
     deskew: dict = Field(default_factory=dict)
     denoise: dict = Field(default_factory=dict)
     binarize: dict = Field(default_factory=dict)
     upscale: dict = Field(default_factory=dict)
 
 
-class LayoutConfig(BaseModel):
+class LayoutConfig(StrictConfigModel):
     engine: str = "none"
 
 
-class OcrConfig(BaseModel):
+class OcrConfig(StrictConfigModel):
     primary_engine: str = "paddleocr"
     primary: dict = Field(default_factory=dict)
     escalation: dict = Field(default_factory=dict)
+    execution: dict = Field(default_factory=dict)
+    routing: dict = Field(default_factory=dict)
     cloud_fallback: dict = Field(default_factory=dict)
 
 
-class QualityConfig(BaseModel):
+class QualityConfig(StrictConfigModel):
     weights: dict
     thresholds: dict
 
 
-class WatermarkFilterConfig(BaseModel):
+class WatermarkFilterConfig(StrictConfigModel):
     enabled: bool = True
     bottom_band_fraction: float = 0.15
     min_page_occurrences: int = 3
     min_page_fraction: float = 0.3
 
 
-class ConcurrencyConfig(BaseModel):
+class ConcurrencyConfig(StrictConfigModel):
     cpu_workers: int = 6
     gpu_stage_batch_size: int = 4
 
 
-class OutputConfig(BaseModel):
+class OutputConfig(StrictConfigModel):
     internal_dirname: str = ".ocr_internal"
     txt_page_marker: str = "===== PAGE {page} ====="
     md_page_heading: str = "## Page {page}"
 
 
-class LoggingConfig(BaseModel):
+class LoggingConfig(StrictConfigModel):
     level: str = "INFO"
 
 
-class Config(BaseModel):
+class Config(StrictConfigModel):
     rasterize: RasterizeConfig
     triage: TriageConfig
     preprocess: PreprocessConfig
